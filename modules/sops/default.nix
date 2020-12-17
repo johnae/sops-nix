@@ -5,7 +5,7 @@ with lib;
 let
   cfg = config.sops;
   users = config.users.users;
-  sops-install-secrets = (pkgs.callPackage ../.. {}).sops-install-secrets;
+  sops-install-secrets = (pkgs.callPackage ../.. { }).sops-install-secrets;
   secretType = types.submodule ({ config, ... }: {
     options = {
       name = mkOption {
@@ -25,8 +25,8 @@ let
         '';
       };
       path = assert assertMsg (builtins.pathExists config.sopsFile) ''
-          Cannot find path '${config.sopsFile}' set in 'sops.secrets."${config._module.args.name}".sopsFile'
-        '';
+        Cannot find path '${config.sopsFile}' set in 'sops.secrets."${config._module.args.name}".sopsFile'
+      '';
         mkOption {
           type = types.str;
           default = "/run/secrets/${config.name}";
@@ -36,7 +36,7 @@ let
           '';
         };
       format = mkOption {
-        type = types.enum ["yaml" "json" "binary"];
+        type = types.enum [ "yaml" "json" "binary" ];
         default = cfg.defaultSopsFormat;
         description = ''
           File format used to decrypt the sops secret.
@@ -81,17 +81,19 @@ let
     inherit (cfg) gnupgHome sshKeyPaths;
   });
 
-  checkedManifest = pkgs.runCommandNoCC "checked-manifest.json" {
-    nativeBuildInputs = [ sops-install-secrets ];
-  } ''
+  checkedManifest = pkgs.runCommandNoCC "checked-manifest.json"
+    {
+      nativeBuildInputs = [ sops-install-secrets ];
+    } ''
     sops-install-secrets -check-mode=${if cfg.validateSopsFiles then "sopsfile" else "manifest"} ${manifest}
     cp ${manifest} $out
   '';
-in {
+in
+{
   options.sops = {
     secrets = mkOption {
       type = types.attrsOf secretType;
-      default = {};
+      default = { };
       description = ''
         Path where the latest secrets are mounted to.
       '';
@@ -132,32 +134,49 @@ in {
 
     sshKeyPaths = mkOption {
       type = types.listOf types.path;
-      default = if config.services.openssh.enable then
-                  map (e: e.path) (lib.filter (e: e.type == "rsa") config.services.openssh.hostKeys)
-                else [];
+      default =
+        if config.services.openssh.enable then
+          map (e: e.path) (lib.filter (e: e.type == "rsa") config.services.openssh.hostKeys)
+        else [ ];
       description = ''
         Path to ssh keys added as GPG keys during sops description.
         This option must be explicitly unset if <literal>config.sops.sshKeyPaths</literal>.
       '';
     };
   };
-  config = mkIf (cfg.secrets != {}) {
+  config = mkIf (cfg.secrets != { }) {
     assertions = [{
-      assertion = cfg.gnupgHome != null -> cfg.sshKeyPaths == [];
+      assertion = cfg.gnupgHome != null -> cfg.sshKeyPaths == [ ];
       message = "Configuration options sops.gnupgHome and sops.sshKeyPaths cannot be set both at the same time";
-    } {
-      assertion = cfg.gnupgHome == null -> cfg.sshKeyPaths != [];
-      message = "Either sops.sshKeyPaths and sops.gnupgHome must be set";
-    }] ++ map (name: let
-      inherit (cfg.secrets.${name}) sopsFile;
-    in {
-      assertion = cfg.validateSopsFiles -> builtins.isPath sopsFile;
-      message = "${sopsFile} is not in the nix store. Either add it to the nix store or set `sops.validateSopsFiles` to false";
-    }) (builtins.attrNames cfg.secrets);
+    }
+      {
+        assertion = cfg.gnupgHome == null -> cfg.sshKeyPaths != [ ];
+        message = "Either sops.sshKeyPaths and sops.gnupgHome must be set";
+      }] ++ map
+      (name:
+        let
+          inherit (cfg.secrets.${name}) sopsFile;
+        in
+        {
+          assertion = cfg.validateSopsFiles -> builtins.isPath sopsFile;
+          message = "${sopsFile} is not in the nix store. Either add it to the nix store or set `sops.validateSopsFiles` to false";
+        })
+      (builtins.attrNames cfg.secrets);
 
-    system.activationScripts.setup-secrets = stringAfter [ "users" "groups" ] ''
-      echo setting up secrets...
-      ${optionalString (cfg.gnupgHome != null) "SOPS_GPG_EXEC=${pkgs.gnupg}/bin/gpg"} ${sops-install-secrets}/bin/sops-install-secrets ${checkedManifest}
-    '';
+    systemd.services.sops-nix-setup-secrets = {
+      description = "sops-nix secrets setup";
+
+      script = ''
+        echo setting up secrets...
+        ${
+          optionalString (cfg.gnupgHome != null)
+          "SOPS_GPG_EXEC=${pkgs.gnupg}/bin/gpg"
+        } ${sops-install-secrets}/bin/sops-install-secrets ${checkedManifest}
+      '';
+
+      serviceConfig.Type = "oneshot";
+
+      wantedBy = [ "default.target" ];
+    };
   };
 }
