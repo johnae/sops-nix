@@ -174,7 +174,11 @@ in
         } ${sops-install-secrets}/bin/sops-install-secrets ${checkedManifest}
       '';
 
-      serviceConfig.Type = "oneshot";
+      serviceConfig = {
+        Type = "oneshot";
+        RestartSec = 10;
+        Restart = "on-failure";
+      };
 
       wantedBy = [ "default.target" ];
     };
